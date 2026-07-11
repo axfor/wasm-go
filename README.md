@@ -6,7 +6,10 @@ This SDK is used to develop the WASM Plugins for Higress in Go.
 
 You can also build wasm locally and copy it to a Docker image. This requires a local build environment:
 
-Go version: >= 1.24
+Prerequisites:
+
+- Go version: >= 1.24
+- Binaryen `wasm-opt` version 130 available in `PATH`
 
 The following is an example of building the plugin [request-block](examples/request-block).
 
@@ -14,8 +17,23 @@ The following is an example of building the plugin [request-block](examples/requ
 
 ```bash
 cd examples/request-block
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm main.go
+make
 ```
+
+The default build uses `scripts/build-wasm.sh`. It compiles a stripped Go Wasm
+release artifact and then runs `wasm-opt -Oz --enable-bulk-memory`. The
+equivalent commands are:
+
+```bash
+GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared \
+  -ldflags='-s -w -buildid=' -o main.unoptimized.wasm .
+wasm-opt main.unoptimized.wasm -Oz --enable-bulk-memory -o main.wasm
+rm -f main.unoptimized.wasm
+```
+
+Use `make build-debug` when an unstripped, non-Binaryen artifact is needed for
+diagnostics. `WASM_OPT=/path/to/wasm-opt make` can be used when Binaryen is not
+installed in `PATH`.
 
 ### step2. build and push docker image
 
