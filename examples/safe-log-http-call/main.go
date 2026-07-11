@@ -17,7 +17,6 @@
 package main
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -77,7 +76,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config SafeLogHttpCallConfig)
 
 	body := []byte(`{"api_key": "sensitive-api-key", "message": "hello"}`)
 
-	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders wrapper.Header, responseBody []byte) {
 		// This log is safe - it only logs the status code, not the sensitive body
 		log.Infof("HTTP call completed with status: %d", statusCode)
 		proxywasm.AddHttpRequestHeader("X-External-Status", strconv.Itoa(statusCode))

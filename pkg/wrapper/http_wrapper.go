@@ -16,18 +16,21 @@ package wrapper
 
 import (
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 
+	"github.com/higress-group/wasm-go/pkg/litehttp"
+	"github.com/higress-group/wasm-go/pkg/liteuuid"
 	"github.com/higress-group/wasm-go/pkg/log"
 )
 
-type ResponseCallback func(statusCode int, responseHeaders http.Header, responseBody []byte)
+// Header is the lightweight HTTP header type used by wrapper callouts.
+type Header = litehttp.Header
+
+type ResponseCallback func(statusCode int, responseHeaders Header, responseBody []byte)
 
 type HttpClient interface {
 	Get(rawURL string, headers [][2]string, cb ResponseCallback, timeoutMillisecond ...uint32) error
@@ -52,31 +55,31 @@ func NewClusterClient[C Cluster](cluster C) *ClusterClient[C] {
 }
 
 func (c ClusterClient[C]) Get(rawURL string, headers [][2]string, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodGet, rawURL, headers, nil, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodGet, rawURL, headers, nil, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Head(rawURL string, headers [][2]string, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodHead, rawURL, headers, nil, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodHead, rawURL, headers, nil, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Options(rawURL string, headers [][2]string, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodOptions, rawURL, headers, nil, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodOptions, rawURL, headers, nil, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Post(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodPost, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodPost, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Put(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodPut, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodPut, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Patch(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodPatch, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodPatch, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Delete(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodDelete, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodDelete, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Connect(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodConnect, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodConnect, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 func (c ClusterClient[C]) Trace(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
-	return HttpCall(c.cluster, http.MethodTrace, rawURL, headers, body, cb, timeoutMillisecond...)
+	return HttpCall(c.cluster, litehttp.MethodTrace, rawURL, headers, body, cb, timeoutMillisecond...)
 }
 
 func (c ClusterClient[C]) Call(method, rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
@@ -117,7 +120,7 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 		timeout = timeoutMillisecond[0]
 	}
 	headers = append(headers, [2]string{":method", method}, [2]string{":path", path}, [2]string{":authority", authority})
-	requestID := uuid.New().String()
+	requestID := liteuuid.New().String()
 	_, err = proxywasm.DispatchHttpCall(cluster.ClusterName(), headers, body, nil, timeout, func(numHeaders, bodySize, numTrailers int) {
 		respBody, err := proxywasm.GetHttpCallResponseBody(0, bodySize)
 		if err != nil {
@@ -127,15 +130,15 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 		if err != nil {
 			proxywasm.LogCriticalf("failed to get response headers: %v", err)
 		}
-		code := http.StatusBadGateway
+		code := litehttp.StatusBadGateway
 		var normalResponse bool
-		headers := make(http.Header)
+		headers := make(Header)
 		for _, h := range respHeaders {
 			if h[0] == ":status" {
 				code, err = strconv.Atoi(h[1])
 				if err != nil {
 					proxywasm.LogErrorf("failed to parse status: %v", err)
-					code = http.StatusInternalServerError
+					code = litehttp.StatusInternalServerError
 				} else {
 					normalResponse = true
 				}
