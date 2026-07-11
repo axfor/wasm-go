@@ -35,6 +35,30 @@ Use `make build-debug` when an unstripped, non-Binaryen artifact is needed for
 diagnostics. `WASM_OPT=/path/to/wasm-opt make` can be used when Binaryen is not
 installed in `PATH`.
 
+### Opt-in lightweight HTTP callouts
+
+The existing `pkg/wrapper` HTTP client keeps its `net/http.Header` API by
+default for source compatibility. Plugins that want to avoid linking Go's full
+HTTP stack can import the additive lightweight package:
+
+```go
+import "github.com/higress-group/wasm-go/pkg/wrapper/httpcall"
+```
+
+Build those plugins with `wasm_lite_http` so the legacy HTTP implementation in
+`pkg/wrapper` is excluded:
+
+```bash
+GO_BUILD_TAGS=wasm_lite_http ../../scripts/build-wasm.sh -o main.wasm .
+```
+
+`GO_BUILD_TAGS` is passed to Go as `-tags`; an equivalent direct invocation is
+`go build -tags=wasm_lite_http ...`.
+
+The build tag only selects the HTTP API implementation. Binaryen `-Oz` remains
+the default post-link optimization in both modes. Existing plugins that do not
+set the tag retain the original `wrapper.HttpClient` and `net/http.Header` API.
+
 ### step2. build and push docker image
 
 A simple Dockerfile:

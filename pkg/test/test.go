@@ -57,7 +57,12 @@ func compileWasm() (string, error) {
 
 	// Compile a debug-friendly Go Wasm input first. Binaryen optimization is a separate
 	// step so tests exercise the same optimized machine code shape as release builds.
-	cmd := exec.Command("go", "build", "-trimpath", "-buildmode=c-shared", "-o", rawOutputPath, "./")
+	buildArgs := []string{"build", "-trimpath", "-buildmode=c-shared"}
+	if buildTags := os.Getenv("GO_BUILD_TAGS"); buildTags != "" {
+		buildArgs = append(buildArgs, "-tags", buildTags)
+	}
+	buildArgs = append(buildArgs, "-o", rawOutputPath, "./")
+	cmd := exec.Command("go", buildArgs...)
 
 	// Filter out existing GOOS and GOARCH to avoid conflicts
 	filteredEnv := []string{}

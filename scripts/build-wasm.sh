@@ -14,6 +14,7 @@ Environment variables:
   GO_BIN             Go executable to use (default: go)
   WASM_OPT           wasm-opt executable to use (default: wasm-opt)
   BINARYEN_VERSION   required Binaryen version (default: 130)
+  GO_BUILD_TAGS      optional Go build tags, for example wasm_lite_http
 EOF
 }
 
@@ -69,6 +70,7 @@ done
 go_bin=${GO_BIN:-go}
 wasm_opt=${WASM_OPT:-wasm-opt}
 binaryen_version=${BINARYEN_VERSION:-130}
+go_build_tags=${GO_BUILD_TAGS:-}
 
 if ! command -v "${go_bin}" >/dev/null 2>&1; then
   echo "Go executable not found: ${go_bin}" >&2
@@ -100,12 +102,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-GOOS=wasip1 GOARCH=wasm "${go_bin}" build \
-  -trimpath \
-  -buildmode=c-shared \
-  -ldflags='-s -w -buildid=' \
-  -o "${raw_wasm}" \
-  "${package}"
+go_build_args=(
+  -trimpath
+  -buildmode=c-shared
+  -ldflags='-s -w -buildid='
+)
+if [[ -n ${go_build_tags} ]]; then
+  go_build_args+=(-tags "${go_build_tags}")
+fi
+go_build_args+=(-o "${raw_wasm}" "${package}")
+
+GOOS=wasip1 GOARCH=wasm "${go_bin}" build "${go_build_args[@]}"
 
 "${wasm_opt}" "${raw_wasm}" \
   -Oz \

@@ -2,10 +2,13 @@
 
 WASM_BUILD ?= ../../scripts/build-wasm.sh
 
-.PHONY: build build-debug clean
+.PHONY: build build-lite build-debug clean
 
 build:
 	$(WASM_BUILD) -o main.wasm .
+
+build-lite:
+	GO_BUILD_TAGS=wasm_lite_http $(WASM_BUILD) -o main.wasm .
 
 build-debug:
 	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm .

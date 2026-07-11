@@ -15,6 +15,8 @@
 package main
 
 import (
+	"net/http"
+
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/tidwall/gjson"
@@ -66,7 +68,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig) types.
 	body := []byte(`{"message": "hello from wasm"}`)
 
 	// Use configured HTTP client to make the call
-	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders wrapper.Header, responseBody []byte) {
+	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Infof("HTTP call response: status=%d, body=%s", statusCode, string(responseBody))
 		// Add response to request headers for downstream
 		proxywasm.AddHttpRequestHeader("X-External-Response", string(responseBody))

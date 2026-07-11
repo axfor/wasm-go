@@ -73,6 +73,15 @@ jobs:
             fi
           done
 
+      - name: Build lightweight wrapper profile
+        run: |
+          cd examples/request-block
+          if GOOS=wasip1 GOARCH=wasm go list -tags=wasm_lite_http -deps . | grep -qx net/http; then
+            echo "lightweight wrapper profile unexpectedly depends on net/http" >&2
+            exit 1
+          fi
+          GO_BUILD_TAGS=wasm_lite_http make build
+
       - name: Check code formatting
         run: |
           if [ -n "$(gofmt -l .)" ]; then

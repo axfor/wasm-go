@@ -50,7 +50,8 @@ Runs tests only in Wasm mode with a specified wasm file path. This function allo
 Auto-compilation requires `wasm-opt` version 130 in `PATH`. Set `WASM_OPT` to
 an explicit executable path when needed. `WASM_SKIP_OPTIMIZATION=1` is available
 for diagnostics, but optimized Wasm is the default so tests cover the release
-code shape.
+code shape. Set `GO_BUILD_TAGS=wasm_lite_http` when testing a plugin that uses
+the lightweight `pkg/wrapper/httpcall` package.
 
 #### Common Wasm file Path
 

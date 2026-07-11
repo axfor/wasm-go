@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -121,7 +122,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig) types.
 	httpCallStartTime := time.Now()
 
 	// Use configured HTTP client to make the call
-	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders wrapper.Header, responseBody []byte) {
+	err := config.client.Post(config.requestPath, headers, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		// Calculate actual HTTP call duration
 		httpCallElapsed := time.Since(httpCallStartTime)
 
