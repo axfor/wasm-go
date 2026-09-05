@@ -1136,8 +1136,8 @@ func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bod
 			return fail("streaming_request_body_host_unsupported",
 				fmt.Errorf("host buffer %d smaller than held %d: host does not accumulate the body across ActionPause", bodySize, ctx.streamHeld))
 		}
-		// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的部分
-		chunk, err = proxywasm.GetHttpRequestBody(ctx.streamHeld, 64<<20)
+		// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的那一段（长度精确可知）
+		chunk, err = proxywasm.GetHttpRequestBody(ctx.streamHeld, bodySize-ctx.streamHeld)
 		if err != nil && bodySize > ctx.streamHeld {
 			return fail("streaming_request_body_read_failed", err)
 		}
