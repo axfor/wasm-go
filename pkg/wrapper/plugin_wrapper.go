@@ -84,6 +84,7 @@ type CommonVmCtx[PluginConfig any] struct {
 	onHttpRequestHeaders        onHttpHeadersFunc[PluginConfig]
 	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
 	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
+	onHttpStreamingRequestBodyAct onHttpStreamingBodyActFunc[PluginConfig]
 	onHttpResponseHeaders       onHttpHeadersFunc[PluginConfig]
 	onHttpResponseBody          onHttpBodyFunc[PluginConfig]
 	onHttpStreamingResponseBody onHttpStreamingBodyFunc[PluginConfig]
@@ -295,6 +296,24 @@ func (o *onProcessStreamingRequestBodyOption[PluginConfig]) Apply(ctx *CommonVmC
 // Deprecated: Please use `ProcessStreamingRequestBody` instead.
 func ProcessStreamingRequestBodyBy[PluginConfig any](f oldOnHttpStreamingBodyFunc[PluginConfig]) CtxOption[PluginConfig] {
 	return &onProcessStreamingRequestBodyOption[PluginConfig]{oldF: f}
+}
+
+// onHttpStreamingBodyActFunc 是带控制权的流式请求体钩子：
+// 返回 ActionPause 时本块留在 Envoy 缓冲区（不替换、不下发、请求头也继续扣住）；
+// 返回 ActionContinue 时用返回的字节替换到目前为止缓冲的全部内容并下发。
+// 这让插件能在"看够了再放行"与"边看边放"之间自由切换，是有界缓冲流式的基础。
+type onHttpStreamingBodyActFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) ([]byte, types.Action)
+
+type onProcessStreamingRequestBodyActOption[PluginConfig any] struct {
+	f onHttpStreamingBodyActFunc[PluginConfig]
+}
+
+func (o *onProcessStreamingRequestBodyActOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.onHttpStreamingRequestBodyAct = o.f
+}
+
+func ProcessStreamingRequestBodyWithAction[PluginConfig any](f onHttpStreamingBodyActFunc[PluginConfig]) CtxOption[PluginConfig] {
+	return &onProcessStreamingRequestBodyActOption[PluginConfig]{f: f}
 }
 
 func ProcessStreamingRequestBody[PluginConfig any](f onHttpStreamingBodyFunc[PluginConfig]) CtxOption[PluginConfig] {
@@ -743,13 +762,13 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 		userContext:   map[string]interface{}{},
 		userAttribute: map[string]interface{}{},
 	}
-	if ctx.vm.onHttpRequestBody != nil || ctx.vm.onHttpStreamingRequestBody != nil {
+	if ctx.vm.onHttpRequestBody != nil || ctx.vm.onHttpStreamingRequestBody != nil || ctx.vm.onHttpStreamingRequestBodyAct != nil {
 		httpCtx.needRequestBody = true
 	}
 	if ctx.vm.onHttpResponseBody != nil || ctx.vm.onHttpStreamingResponseBody != nil {
 		httpCtx.needResponseBody = true
 	}
-	if ctx.vm.onHttpStreamingRequestBody != nil {
+	if ctx.vm.onHttpStreamingRequestBody != nil || ctx.vm.onHttpStreamingRequestBodyAct != nil {
 		httpCtx.streamingRequestBody = true
 	}
 	if ctx.vm.onHttpStreamingResponseBody != nil {
@@ -765,6 +784,7 @@ type CommonHttpCtx[PluginConfig any] struct {
 	needRequestBody           bool
 	needResponseBody          bool
 	streamingRequestBody      bool
+	streamHeld                int // 上次返回 Pause 后累计留在 Envoy 缓冲区里的字节数
 	streamingResponseBody     bool
 	pauseStreamingResponse    bool
 	requestBodySize           int
@@ -1093,6 +1113,25 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return types.ActionContinue
 	}
 	if !ctx.needRequestBody {
+		return types.ActionContinue
+	}
+	if ctx.plugin.vm.onHttpStreamingRequestBodyAct != nil && ctx.streamingRequestBody {
+		var chunk []byte
+		if ctx.streamHeld > 0 {
+			// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的部分
+			chunk, _ = proxywasm.GetHttpRequestBody(ctx.streamHeld, 64<<20)
+		} else {
+			chunk, _ = proxywasm.GetHttpRequestBody(0, bodySize)
+		}
+		out, action := ctx.plugin.vm.onHttpStreamingRequestBodyAct(ctx, *ctx.config, chunk, endOfStream)
+		if action == types.ActionPause {
+			ctx.streamHeld += len(chunk)
+			return types.ActionPause
+		}
+		ctx.streamHeld = 0
+		if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
+			ctx.plugin.vm.log.Warnf("replace request body chunk failed: %v", err)
+		}
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBody != nil && ctx.streamingRequestBody {
