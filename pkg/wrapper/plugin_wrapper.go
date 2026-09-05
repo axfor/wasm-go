@@ -74,25 +74,25 @@ type onPluginStartOrReload func(context PluginContext) error
 
 type CommonVmCtx[PluginConfig any] struct {
 	types.DefaultVMContext
-	pluginName                  string
-	log                         log.Log
-	hasCustomConfig             bool
-	vmID                        string
-	prePluginStartOrReload      onPluginStartOrReload
-	parseConfig                 ParseRawConfigWithContextFunc[PluginConfig]
-	parseRuleConfig             ParseRawRuleConfigWithContextFunc[PluginConfig]
-	onHttpRequestHeaders        onHttpHeadersFunc[PluginConfig]
-	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
-	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
+	pluginName                    string
+	log                           log.Log
+	hasCustomConfig               bool
+	vmID                          string
+	prePluginStartOrReload        onPluginStartOrReload
+	parseConfig                   ParseRawConfigWithContextFunc[PluginConfig]
+	parseRuleConfig               ParseRawRuleConfigWithContextFunc[PluginConfig]
+	onHttpRequestHeaders          onHttpHeadersFunc[PluginConfig]
+	onHttpRequestBody             onHttpBodyFunc[PluginConfig]
+	onHttpStreamingRequestBody    onHttpStreamingBodyFunc[PluginConfig]
 	onHttpStreamingRequestBodyAct onHttpStreamingBodyActFunc[PluginConfig]
-	onHttpResponseHeaders       onHttpHeadersFunc[PluginConfig]
-	onHttpResponseBody          onHttpBodyFunc[PluginConfig]
-	onHttpStreamingResponseBody onHttpStreamingBodyFunc[PluginConfig]
-	onHttpStreamDone            onHttpStreamDoneFunc[PluginConfig]
-	rebuildAfterRequests        uint64 // Number of requests after which to trigger rebuild
-	requestCount                uint64 // Current request count
-	rebuildMaxMem               uint64 // Maximum memory size in bytes before triggering rebuild
-	maxRequestsPerIoCycle       uint64 // Maximum concurrent requests per IO cycle (0 means not set)
+	onHttpResponseHeaders         onHttpHeadersFunc[PluginConfig]
+	onHttpResponseBody            onHttpBodyFunc[PluginConfig]
+	onHttpStreamingResponseBody   onHttpStreamingBodyFunc[PluginConfig]
+	onHttpStreamDone              onHttpStreamDoneFunc[PluginConfig]
+	rebuildAfterRequests          uint64 // Number of requests after which to trigger rebuild
+	requestCount                  uint64 // Current request count
+	rebuildMaxMem                 uint64 // Maximum memory size in bytes before triggering rebuild
+	maxRequestsPerIoCycle         uint64 // Maximum concurrent requests per IO cycle (0 means not set)
 }
 
 type TickFuncEntry struct {
@@ -298,7 +298,11 @@ func ProcessStreamingRequestBodyBy[PluginConfig any](f oldOnHttpStreamingBodyFun
 	return &onProcessStreamingRequestBodyOption[PluginConfig]{oldF: f}
 }
 
-// onHttpStreamingBodyActFunc 是带控制权的流式请求体钩子：
+// onHttpStreamingBodyActFunc 是带控制权的流式请求体钩子。
+// 宿主要求：Pause 后新到的块须在下次回调前已追加进宿主缓冲区（Higress envoy 分支满足；上游 Envoy 不满足，
+// 此时 wrapper 会以 500 终止请求，见 onHttpStreamingRequestBodyWithAction）。
+//
+// 语义：
 // 返回 ActionPause 时本块留在 Envoy 缓冲区（不替换、不下发、请求头也继续扣住）；
 // 返回 ActionContinue 时用返回的字节替换到目前为止缓冲的全部内容并下发。
 // 这让插件能在"看够了再放行"与"边看边放"之间自由切换，是有界缓冲流式的基础。
@@ -1106,6 +1110,55 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	return ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
 }
 
+// onHttpStreamingRequestBodyWithAction 驱动带控制权的流式请求体钩子。
+//
+// 依赖宿主的一个行为：上一次返回 Pause 后，本次回调时新到的块已经追加进宿主缓冲区，
+// bodySize 是累计大小（Higress 的 envoy 分支 envoy-1.27 / envoy-1.36 在 onRequestBody 前
+// 调用 addDecodedData，满足这一点；上游 Envoy 在回调时新块尚未入缓冲区，不满足）。
+// 不满足时插件会永远慢一块，这里把它识别为错误并终止请求，而不是把原始字节放行给上游。
+func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bodySize int, endOfStream bool) (action types.Action) {
+	fail := func(detail string, err error) types.Action {
+		ctx.plugin.vm.log.Errorf("streaming request body with action: %s: %v", detail, err)
+		ctx.streamHeld = 0
+		_ = proxywasm.SendHttpResponseWithDetail(500, detail, nil, []byte("internal error"), -1)
+		return types.ActionPause
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			// 钩子 panic：既不能 Continue（累计的原始字节会直接放行上游），也不能悬挂
+			action = fail("streaming_request_body_hook_panic", fmt.Errorf("%v", r))
+		}
+	}()
+	var chunk []byte
+	var err error
+	if ctx.streamHeld > 0 {
+		if bodySize < ctx.streamHeld {
+			return fail("streaming_request_body_host_unsupported",
+				fmt.Errorf("host buffer %d smaller than held %d: host does not accumulate the body across ActionPause", bodySize, ctx.streamHeld))
+		}
+		// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的部分
+		chunk, err = proxywasm.GetHttpRequestBody(ctx.streamHeld, 64<<20)
+		if err != nil && bodySize > ctx.streamHeld {
+			return fail("streaming_request_body_read_failed", err)
+		}
+	} else {
+		chunk, err = proxywasm.GetHttpRequestBody(0, bodySize)
+		if err != nil && bodySize > 0 {
+			return fail("streaming_request_body_read_failed", err)
+		}
+	}
+	out, action := ctx.plugin.vm.onHttpStreamingRequestBodyAct(ctx, *ctx.config, chunk, endOfStream)
+	if action == types.ActionPause {
+		ctx.streamHeld += len(chunk)
+		return types.ActionPause
+	}
+	ctx.streamHeld = 0
+	if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
+		return fail("streaming_request_body_replace_failed", err)
+	}
+	return types.ActionContinue
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.DecodeData
@@ -1116,23 +1169,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBodyAct != nil && ctx.streamingRequestBody {
-		var chunk []byte
-		if ctx.streamHeld > 0 {
-			// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的部分
-			chunk, _ = proxywasm.GetHttpRequestBody(ctx.streamHeld, 64<<20)
-		} else {
-			chunk, _ = proxywasm.GetHttpRequestBody(0, bodySize)
-		}
-		out, action := ctx.plugin.vm.onHttpStreamingRequestBodyAct(ctx, *ctx.config, chunk, endOfStream)
-		if action == types.ActionPause {
-			ctx.streamHeld += len(chunk)
-			return types.ActionPause
-		}
-		ctx.streamHeld = 0
-		if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
-			ctx.plugin.vm.log.Warnf("replace request body chunk failed: %v", err)
-		}
-		return types.ActionContinue
+		return ctx.onHttpStreamingRequestBodyWithAction(bodySize, endOfStream)
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBody != nil && ctx.streamingRequestBody {
 		chunk, _ := proxywasm.GetHttpRequestBody(0, bodySize)
