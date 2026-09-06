@@ -26,6 +26,7 @@ func TestBufferedBodyFinalizedOnce(t *testing.T) {
 				}
 				vm := wrapper.NewCommonVmCtx("trailers", wrapper.ParseConfig(func(gjson.Result, *trailerConfig) error { return nil }), wrapper.ProcessRequestBody(handler), wrapper.ProcessResponseBody(handler))
 				h, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm).WithPluginConfiguration([]byte(`{}`)))
+				h.RegisterForeignFunction("get_log_level", func([]byte) []byte { return []byte{0, 0, 0, 0} })
 				defer reset()
 				require.Equal(t, types.OnPluginStartStatusOK, h.StartPlugin())
 				id := h.InitializeHttpContext()
@@ -62,6 +63,7 @@ func TestStreamingTrailersDoNotInvokeBufferedHandler(t *testing.T) {
 			wrapper.ProcessResponseBody(func(wrapper.HttpContext, trailerConfig, []byte) types.Action { buffered++; return types.ActionContinue }),
 			wrapper.ProcessStreamingResponseBody(func(_ wrapper.HttpContext, _ trailerConfig, b []byte, _ bool) []byte { streamed++; return b }))
 		h, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm).WithPluginConfiguration([]byte(`{}`)))
+		h.RegisterForeignFunction("get_log_level", func([]byte) []byte { return []byte{0, 0, 0, 0} })
 		defer reset()
 		h.StartPlugin()
 		id := h.InitializeHttpContext()
@@ -81,6 +83,7 @@ func TestStreamingTrailersCanWaitForAsyncBody(t *testing.T) {
 		wrapper.ProcessStreamingResponseBody(func(_ wrapper.HttpContext, _ trailerConfig, b []byte, _ bool) []byte { return b }),
 		wrapper.ProcessResponseTrailers(func(wrapper.HttpContext, trailerConfig) types.Action { calls++; return types.ActionPause }))
 	h, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm).WithPluginConfiguration([]byte(`{}`)))
+	h.RegisterForeignFunction("get_log_level", func([]byte) []byte { return []byte{0, 0, 0, 0} })
 	defer reset()
 	require.Equal(t, types.OnPluginStartStatusOK, h.StartPlugin())
 	id := h.InitializeHttpContext()
