@@ -1171,6 +1171,27 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 	if ctx.plugin.vm.onHttpStreamingRequestBodyAct != nil && ctx.streamingRequestBody {
 		return ctx.onHttpStreamingRequestBodyWithAction(bodySize, endOfStream)
 	}
+	if ctx.plugin.vm.onHttpStreamingRequestBodyAct != nil && ctx.plugin.vm.onHttpRequestBody == nil {
+		// 插件调用了 BufferRequestBody()：把整份 body 攒齐后一次交给带控制权的钩子，
+		// 而不是因为没有缓冲钩子就把原始 body 静默放行给上游。
+		ctx.requestBodySize += bodySize
+		if !endOfStream {
+			return types.ActionPause
+		}
+		body, err := proxywasm.GetHttpRequestBody(0, ctx.requestBodySize)
+		if err != nil {
+			ctx.plugin.vm.log.Warnf("get request body failed: %v", err)
+			return types.ActionContinue
+		}
+		out, action := ctx.plugin.vm.onHttpStreamingRequestBodyAct(ctx, *ctx.config, body, true)
+		if action == types.ActionPause {
+			return types.ActionPause
+		}
+		if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
+			ctx.plugin.vm.log.Warnf("replace request body failed: %v", err)
+		}
+		return types.ActionContinue
+	}
 	if ctx.plugin.vm.onHttpStreamingRequestBody != nil && ctx.streamingRequestBody {
 		chunk, _ := proxywasm.GetHttpRequestBody(0, bodySize)
 		modifiedChunk := ctx.plugin.vm.onHttpStreamingRequestBody(ctx, *ctx.config, chunk, endOfStream)
