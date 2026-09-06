@@ -298,14 +298,15 @@ func ProcessStreamingRequestBodyBy[PluginConfig any](f oldOnHttpStreamingBodyFun
 	return &onProcessStreamingRequestBodyOption[PluginConfig]{oldF: f}
 }
 
-// onHttpStreamingBodyActFunc 是带控制权的流式请求体钩子。
-// 宿主要求：Pause 后新到的块须在下次回调前已追加进宿主缓冲区（Higress envoy 分支满足；上游 Envoy 不满足，
-// 此时 wrapper 会以 500 终止请求，见 onHttpStreamingRequestBodyWithAction）。
+// onHttpStreamingBodyActFunc is the streaming request body hook that keeps control of the flow.
+// Host requirement: after a Pause, chunks that arrive later must already be appended to the host buffer before
+// the next callback (the Higress envoy branches satisfy this; upstream Envoy does not, in which case the wrapper
+// ends the request with 500, see onHttpStreamingRequestBodyWithAction).
 //
-// 语义：
-// 返回 ActionPause 时本块留在 Envoy 缓冲区（不替换、不下发、请求头也继续扣住）；
-// 返回 ActionContinue 时用返回的字节替换到目前为止缓冲的全部内容并下发。
-// 这让插件能在"看够了再放行"与"边看边放"之间自由切换，是有界缓冲流式的基础。
+// Semantics: returning ActionPause leaves this chunk in the Envoy buffer (nothing replaced, nothing forwarded,
+// request headers still held); returning ActionContinue replaces everything buffered so far with the returned
+// bytes and forwards it. That lets a plugin switch freely between "look before releasing" and "release as it
+// goes", which is the basis of bounded-buffer streaming.
 type onHttpStreamingBodyActFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) ([]byte, types.Action)
 
 type onProcessStreamingRequestBodyActOption[PluginConfig any] struct {
@@ -788,7 +789,7 @@ type CommonHttpCtx[PluginConfig any] struct {
 	needRequestBody           bool
 	needResponseBody          bool
 	streamingRequestBody      bool
-	streamHeld                int // 上次返回 Pause 后累计留在 Envoy 缓冲区里的字节数
+	streamHeld                int // bytes accumulated in the Envoy buffer since the last Pause
 	streamingResponseBody     bool
 	pauseStreamingResponse    bool
 	requestBodySize           int
@@ -1110,12 +1111,14 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	return ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
 }
 
-// onHttpStreamingRequestBodyWithAction 驱动带控制权的流式请求体钩子。
+// onHttpStreamingRequestBodyWithAction drives the streaming request body hook that keeps control of the flow.
 //
-// 依赖宿主的一个行为：上一次返回 Pause 后，本次回调时新到的块已经追加进宿主缓冲区，
-// bodySize 是累计大小（Higress 的 envoy 分支 envoy-1.27 / envoy-1.36 在 onRequestBody 前
-// 调用 addDecodedData，满足这一点；上游 Envoy 在回调时新块尚未入缓冲区，不满足）。
-// 不满足时插件会永远慢一块，这里把它识别为错误并终止请求，而不是把原始字节放行给上游。
+// It relies on one host behaviour: after the previous callback returned Pause, the chunk that arrived since is
+// already appended to the host buffer when this callback runs, and bodySize is the accumulated size (the Higress
+// envoy branches envoy-1.27 / envoy-1.36 call addDecodedData before onRequestBody, which satisfies this; upstream
+// Envoy has not buffered the new chunk yet at callback time, which does not). Without it the plugin would always
+// run one chunk behind, so that case is detected as an error and the request is ended instead of forwarding raw
+// bytes upstream.
 func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bodySize int, endOfStream bool) (action types.Action) {
 	fail := func(detail string, err error) types.Action {
 		ctx.plugin.vm.log.Errorf("streaming request body with action: %s: %v", detail, err)
@@ -1125,7 +1128,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bod
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			// 钩子 panic：既不能 Continue（累计的原始字节会直接放行上游），也不能悬挂
+			// The hook panicked: neither Continue (the accumulated raw bytes would go straight upstream) nor hanging is acceptable
 			action = fail("streaming_request_body_hook_panic", fmt.Errorf("%v", r))
 		}
 	}()
@@ -1136,7 +1139,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bod
 			return fail("streaming_request_body_host_unsupported",
 				fmt.Errorf("host buffer %d smaller than held %d: host does not accumulate the body across ActionPause", bodySize, ctx.streamHeld))
 		}
-		// 之前 Pause 过：宿主缓冲区里是累计内容，只取新到的那一段（长度精确可知）
+		// A Pause happened before: the host buffer holds the accumulated content, take only the newly arrived part (its length is known exactly)
 		chunk, err = proxywasm.GetHttpRequestBody(ctx.streamHeld, bodySize-ctx.streamHeld)
 		if err != nil && bodySize > ctx.streamHeld {
 			return fail("streaming_request_body_read_failed", err)
@@ -1173,8 +1176,8 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return ctx.onHttpStreamingRequestBodyWithAction(bodySize, endOfStream)
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBodyAct != nil && ctx.plugin.vm.onHttpRequestBody == nil {
-		// 插件调用了 BufferRequestBody()：把整份 body 攒齐后一次交给带控制权的钩子，
-		// 而不是因为没有缓冲钩子就把原始 body 静默放行给上游。
+		// The plugin called BufferRequestBody(): collect the whole body and hand it to the controlling hook once,
+		// instead of silently forwarding the raw body upstream because there is no buffering hook.
 		ctx.requestBodySize += bodySize
 		if !endOfStream {
 			return types.ActionPause
