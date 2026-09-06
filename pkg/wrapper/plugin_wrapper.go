@@ -1161,6 +1161,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bod
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	gcWatchdog()
 	ctx.executionPhase = iface.DecodeData
 	if ctx.config == nil {
 		return types.ActionContinue
@@ -1256,6 +1257,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, en
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	gcWatchdog()
 	ctx.executionPhase = iface.EncodeData
 	if ctx.config == nil {
 		return types.ActionContinue
