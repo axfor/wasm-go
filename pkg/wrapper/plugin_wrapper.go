@@ -15,6 +15,7 @@
 package wrapper
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -1156,8 +1157,14 @@ func (ctx *CommonHttpCtx[PluginConfig]) onHttpStreamingRequestBodyWithAction(bod
 		return types.ActionPause
 	}
 	ctx.streamHeld = 0
-	if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
-		return fail("streaming_request_body_replace_failed", err)
+	// Only replace when the plugin actually changed something. ReplaceHttpRequestBody rewrites the whole
+	// decoding buffer of the stream, which is shared by every filter in the chain: a plugin that forwards
+	// bytes unchanged (a pass-through phase, or an observe-only plugin) would otherwise wipe the data a
+	// later filter has buffered while it waits for more, and that filter then sees a truncated body.
+	if !bytes.Equal(out, chunk) {
+		if err := proxywasm.ReplaceHttpRequestBody(out); err != nil {
+			return fail("streaming_request_body_replace_failed", err)
+		}
 	}
 	return types.ActionContinue
 }
