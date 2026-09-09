@@ -66,6 +66,11 @@ type HttpContext interface {
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
 	BufferResponseBody()
+	// ResumeStreamingRequestBody continues a request whose ProcessStreamingRequestBodyWithAction hook returned ActionPause,
+	// from outside that hook (the callback of an HTTP call, say). By then the plugin has put what it wants forwarded into the
+	// host buffer (ReplaceHttpRequestBody, AppendHttpRequestBody); the raw bytes held since the Pause go with it, and the next
+	// chunk is read from the start of the buffer again.
+	ResumeStreamingRequestBody() error
 	// This extension adds support for pausing and modifying streaming HTTP responses
 	// using external HTTP service calls during the response body phase.
 	//

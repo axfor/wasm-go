@@ -963,6 +963,13 @@ func (ctx *CommonHttpCtx[PluginConfig]) BufferResponseBody() {
 	ctx.streamingResponseBody = false
 }
 
+// ResumeStreamingRequestBody: see iface.HttpContext. The host buffer now holds what the plugin built, not the raw
+// bytes counted in streamHeld, so that count is dropped before the stream continues.
+func (ctx *CommonHttpCtx[PluginConfig]) ResumeStreamingRequestBody() error {
+	ctx.streamHeld = 0
+	return proxywasm.ResumeHttpRequest()
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) NeedPauseStreamingResponse() {
 	ctx.pauseStreamingResponse = true
 }
