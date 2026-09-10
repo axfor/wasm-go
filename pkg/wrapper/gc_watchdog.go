@@ -40,7 +40,10 @@ var (
 	// What the module has taken from the host and cannot give back: in wasm the linear memory only ever grows, so
 	// where it went is worth saying when a collection is forced. Live objects are one part of it; spans that are free
 	// but still mapped, the room lost inside spans, stacks and the runtime's own tables are the rest.
-	gcWatchBreakdown = []metrics.Sample{
+	// The true live set, as of the last completed collection. It is not the same as the heap class below, which also
+	// counts objects that are dead but not yet swept -- and the sweeper lags exactly when allocation is heaviest.
+	gcWatchLiveSample = []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	gcWatchBreakdown  = []metrics.Sample{
 		{Name: "/memory/classes/total:bytes"},
 		{Name: "/memory/classes/heap/free:bytes"},
 		{Name: "/memory/classes/heap/unused:bytes"},
@@ -71,6 +74,15 @@ func GCWatchdogCheckNow() {
 		return
 	}
 	gcWatchdogCheck()
+}
+
+// gcWatchMarkedLive is what the last collection actually marked as live.
+func gcWatchMarkedLive() uint64 {
+	metrics.Read(gcWatchLiveSample)
+	if gcWatchLiveSample[0].Value.Kind() != metrics.KindUint64 {
+		return 0
+	}
+	return gcWatchLiveSample[0].Value.Uint64()
 }
 
 // gcWatchClasses reports where the memory the module holds has gone, in MB.
@@ -109,6 +121,6 @@ func gcWatchdogCheck() {
 	gcWatchForce()
 	live := gcWatchHeapBytes()
 	gcWatchLastLive = live
-	gcWatchLog("gc watchdog: heap %dMB exceeded goal %dMB without a GC cycle, forced GC, live now %dMB; %s",
-		heap>>20, goal>>20, live>>20, gcWatchClasses())
+	gcWatchLog("gc watchdog: heap %dMB exceeded goal %dMB without a GC cycle, forced GC, live now %dMB (marked %dMB); %s",
+		heap>>20, goal>>20, live>>20, gcWatchMarkedLive()>>20, gcWatchClasses())
 }
