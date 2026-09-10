@@ -1,6 +1,7 @@
 package wrapper
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/metrics"
 
@@ -36,6 +37,18 @@ var (
 	gcWatchCalls    uint64
 	gcWatchLastLive uint64
 	gcWatchSamples  = []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+	// What the module has taken from the host and cannot give back: in wasm the linear memory only ever grows, so
+	// where it went is worth saying when a collection is forced. Live objects are one part of it; spans that are free
+	// but still mapped, the room lost inside spans, stacks and the runtime's own tables are the rest.
+	gcWatchBreakdown = []metrics.Sample{
+		{Name: "/memory/classes/total:bytes"},
+		{Name: "/memory/classes/heap/free:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"},
+		{Name: "/memory/classes/heap/stacks:bytes"},
+		{Name: "/memory/classes/metadata/mspan/inuse:bytes"},
+		{Name: "/memory/classes/metadata/mcache/inuse:bytes"},
+		{Name: "/memory/classes/metadata/other:bytes"},
+	}
 
 	// replaceable for tests
 	gcWatchHeapBytes = func() uint64 {
@@ -58,6 +71,19 @@ func GCWatchdogCheckNow() {
 		return
 	}
 	gcWatchdogCheck()
+}
+
+// gcWatchClasses reports where the memory the module holds has gone, in MB.
+func gcWatchClasses() string {
+	metrics.Read(gcWatchBreakdown)
+	v := func(i int) uint64 {
+		if gcWatchBreakdown[i].Value.Kind() != metrics.KindUint64 {
+			return 0
+		}
+		return gcWatchBreakdown[i].Value.Uint64() >> 20
+	}
+	return fmt.Sprintf("total %dMB (free %dMB, unused %dMB, stacks %dMB, metadata %dMB)",
+		v(0), v(1), v(2), v(3), v(4)+v(5)+v(6))
 }
 
 func gcWatchdog() {
@@ -83,5 +109,6 @@ func gcWatchdogCheck() {
 	gcWatchForce()
 	live := gcWatchHeapBytes()
 	gcWatchLastLive = live
-	gcWatchLog("gc watchdog: heap %dMB exceeded goal %dMB without a GC cycle, forced GC, live now %dMB", heap>>20, goal>>20, live>>20)
+	gcWatchLog("gc watchdog: heap %dMB exceeded goal %dMB without a GC cycle, forced GC, live now %dMB; %s",
+		heap>>20, goal>>20, live>>20, gcWatchClasses())
 }
