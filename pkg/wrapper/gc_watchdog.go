@@ -49,6 +49,17 @@ var (
 	gcWatchLog   = func(format string, args ...interface{}) { proxywasm.LogWarnf(format, args...) }
 )
 
+// GCWatchdogCheckNow runs the check straight away instead of on the next scheduled one. For a callback that has just
+// allocated far more than a body chunk -- a request released in one piece after waiting, say -- where the allocation
+// of the callbacks in between would carry the heap well past its goal before the next check, and in wasm the linear
+// memory never gives back what it grew to.
+func GCWatchdogCheckNow() {
+	if !GCWatchdogEnabled {
+		return
+	}
+	gcWatchdogCheck()
+}
+
 func gcWatchdog() {
 	if !GCWatchdogEnabled {
 		return
@@ -57,6 +68,10 @@ func gcWatchdog() {
 	if gcWatchCalls%GCWatchdogEvery != 0 {
 		return
 	}
+	gcWatchdogCheck()
+}
+
+func gcWatchdogCheck() {
 	heap := gcWatchHeapBytes()
 	goal := uint64(float64(gcWatchLastLive) * GCWatchdogFactor)
 	if goal < GCWatchdogFloor {
