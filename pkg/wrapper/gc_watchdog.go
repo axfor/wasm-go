@@ -33,6 +33,10 @@ var (
 	GCWatchdogFactor = 2.0
 	// GCWatchdogEvery: check once every this many body callbacks.
 	GCWatchdogEvery uint64 = 64
+	// GCWatchdogEveryBytes: also check once this many body bytes have come in since the last check (0 = callbacks
+	// only). Every body callback copies its chunk into the module, and a chunk is whatever the host hands over -- 16KB
+	// or a whole request -- so a count of callbacks alone lets the heap overshoot by Every chunks of any size.
+	GCWatchdogEveryBytes uint64 = 512 << 10
 	// GCWatchdogProfile: log where the memory in use was allocated, after a forced collection whose live set is above
 	// GCWatchdogProfileFloor. For finding out what a busy worker is holding; off by default, it walks the heap profile.
 	// Only a build with the gcprofile tag has the profile to walk (see gcWatchTopSites).
@@ -40,6 +44,7 @@ var (
 	GCWatchdogProfileFloor uint64 = 32 << 20
 
 	gcWatchCalls    uint64
+	gcWatchBytes    uint64
 	gcWatchLastLive uint64
 	gcWatchSamples  = []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
 	// What the module has taken from the host and cannot give back: in wasm the linear memory only ever grows, so
@@ -109,14 +114,19 @@ func gcWatchClasses() string {
 		v(0), v(1), v(2), v(3), v(4)+v(5)+v(6))
 }
 
-func gcWatchdog() {
+// gcWatchdog runs at the top of every body callback; bodySize is the size the host reports for it.
+func gcWatchdog(bodySize int) {
 	if !GCWatchdogEnabled {
 		return
 	}
 	gcWatchCalls++
-	if gcWatchCalls%GCWatchdogEvery != 0 {
+	if bodySize > 0 {
+		gcWatchBytes += uint64(bodySize)
+	}
+	if gcWatchCalls%GCWatchdogEvery != 0 && (GCWatchdogEveryBytes == 0 || gcWatchBytes < GCWatchdogEveryBytes) {
 		return
 	}
+	gcWatchBytes = 0
 	gcWatchdogCheck()
 }
 
