@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/metrics"
-	"sort"
-	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 )
@@ -37,6 +35,7 @@ var (
 	GCWatchdogEvery uint64 = 64
 	// GCWatchdogProfile: log where the memory in use was allocated, after a forced collection whose live set is above
 	// GCWatchdogProfileFloor. For finding out what a busy worker is holding; off by default, it walks the heap profile.
+	// Only a build with the gcprofile tag has the profile to walk (see gcWatchTopSites).
 	GCWatchdogProfile             = false
 	GCWatchdogProfileFloor uint64 = 32 << 20
 
@@ -82,39 +81,11 @@ func GCWatchdogCheckNow() {
 	gcWatchdogCheck()
 }
 
-// gcWatchTopSites logs the allocation sites holding the most memory. Only what the profiler sampled is visible
-// (one object in every MemProfileRate bytes), which is enough to tell which of a handful of places is holding on.
-func gcWatchTopSites(live uint64) {
-	if !GCWatchdogProfile || live < GCWatchdogProfileFloor {
-		return
-	}
-	var recs []runtime.MemProfileRecord
-	n, ok := runtime.MemProfile(nil, false)
-	for !ok {
-		recs = make([]runtime.MemProfileRecord, n+64)
-		n, ok = runtime.MemProfile(recs, false)
-	}
-	recs = recs[:n]
-	sort.Slice(recs, func(i, j int) bool { return recs[i].InUseBytes() > recs[j].InUseBytes() })
-	for i, r := range recs {
-		if i == 5 || r.InUseBytes() == 0 {
-			break
-		}
-		frames := runtime.CallersFrames(r.Stack())
-		var where []string
-		for len(where) < 4 {
-			f, more := frames.Next()
-			if f.Function == "" {
-				break
-			}
-			where = append(where, fmt.Sprintf("%s:%d", f.Function, f.Line))
-			if !more {
-				break
-			}
-		}
-		gcWatchLog("gc watchdog: holding %dMB in %d objects at %s", r.InUseBytes()>>20, r.InUseObjects(), strings.Join(where, " <- "))
-	}
-}
+// gcWatchTopSites logs the allocation sites holding the most memory when GCWatchdogProfile is on. It does nothing
+// unless the build has the gcprofile tag (gc_watchdog_profile.go): a reference to runtime.MemProfile anywhere in a
+// program keeps the runtime's memory profiler on, and its bucket table alone is 1.4MB of linear memory, which a wasm
+// module never gives back.
+var gcWatchTopSites = func(live uint64) {}
 
 // gcWatchMarkedLive is what the last collection actually marked as live.
 func gcWatchMarkedLive() uint64 {
