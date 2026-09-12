@@ -1048,6 +1048,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) IsBinaryResponseBody() bool {
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.DecodeHeader
+	logLevelGen++ // the host's log level is read once a request, not once a log statement (see envoyLogLevel)
 	// Track if endOfStream was received in the header phase
 	ctx.requestHeaderEndOfStream = endOfStream
 

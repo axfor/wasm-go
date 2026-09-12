@@ -70,15 +70,32 @@ func (l *DefaultLog) log(level LogLevel, msg string) {
 	}
 }
 
-func (l *DefaultLog) logFormat(level LogLevel, format string, args ...interface{}) {
-	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
-	var envoyLogLevel LogLevel
-	if err != nil {
-		envoyLogLevel = LogLevelTrace
-	} else {
-		envoyLogLevel = LogLevel(binary.LittleEndian.Uint32(value))
+// logLevelGen is bumped once per request (OnHttpRequestHeaders) so the host's log level is asked for once a request
+// instead of once a log statement: asking is a foreign call, and its four-byte answer is an allocation inside the
+// module, paid even by the debug statements a production log level drops -- a dozen of each per request, per plugin.
+// A level changed through Envoy's admin interface therefore takes effect from the next request.
+var (
+	logLevelGen    uint64
+	logLevelReadAt uint64 // the generation the cached level was read at; 0 means "never read"
+	logLevelCached LogLevel
+)
+
+func envoyLogLevel() LogLevel {
+	if logLevelReadAt == logLevelGen+1 {
+		return logLevelCached
 	}
-	if level < envoyLogLevel {
+	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
+	if err != nil || len(value) < 4 {
+		logLevelCached = LogLevelTrace
+	} else {
+		logLevelCached = LogLevel(binary.LittleEndian.Uint32(value))
+	}
+	logLevelReadAt = logLevelGen + 1
+	return logLevelCached
+}
+
+func (l *DefaultLog) logFormat(level LogLevel, format string, args ...interface{}) {
+	if level < envoyLogLevel() {
 		return
 	}
 	requestIDRaw, _ := proxywasm.GetProperty([]string{"x_request_id"})
